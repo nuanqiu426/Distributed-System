@@ -84,6 +84,7 @@ func main() {
 	}
 
 	ofile.Close()
+	fmt.Println("Done...")
 }
 
 // load the application Map and Reduce functions

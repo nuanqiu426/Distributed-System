@@ -17,10 +17,10 @@ import "strconv"
 // and look only at the contents argument. The return value is a slice
 // of key/value pairs.
 func Map(filename string, contents string) []mr.KeyValue {
-	// function to detect word separators.
+	// function to detect word separators. 匿名函数 用于检测内容中的分隔符
 	ff := func(r rune) bool { return !unicode.IsLetter(r) }
 
-	// split contents into an array of words.
+	// split contents into an array of words. 根据ff将content中的单词切分为words切片
 	words := strings.FieldsFunc(contents, ff)
 
 	kva := []mr.KeyValue{}
