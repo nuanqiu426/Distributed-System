@@ -28,7 +28,7 @@ type ApplyTaskReply struct {
 type Task struct {
 	TaskType int
 	Filename string
-	NReduce  int
+	Num      int
 	TaskId   int
 	Finished bool
 	Start    time.Time
@@ -37,6 +37,7 @@ type Task struct {
 const Waiting = 3
 const Map = 1
 const Reduce = 2
+const AllDone = 0
 
 var mutex sync.Mutex
 

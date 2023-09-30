@@ -32,17 +32,19 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	flag := false
 	for {
 		task := Task{}
+		args := ApplyTaskArgs{}
 		if flag {
 			task.TaskType = Waiting
+			args.Status = Waiting // 告知master我在waiting
 			flag = false
 		}
-
-		if GetTask(&task) {
+		ok := call("Coordinator.ApplyForTask", &args, &task)
+		if ok {
 			switch task.TaskType {
-			case Waiting:
+			case Waiting: // 通知worker该waiting
 				{
 					time.Sleep(time.Second)
-					flag = true //你的下一个任务预定为
+					flag = true
 				}
 			case Map:
 				{
@@ -85,33 +87,6 @@ func GetTask(reply *Task) bool {
 	return ok
 }
 
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//func CallExample() {
-//
-//	// declare an argument structure.
-//	args := ExampleArgs{}
-//
-//	// fill in the argument(s).
-//	args.X = 99
-//
-//	// declare a reply structure.
-//	reply := ExampleReply{}
-//
-//	// send the RPC request, wait for the reply.
-//	// the "Coordinator.Example" tells the
-//	// receiving server that we'd like to call
-//	// the Example() method of struct Coordinator.
-//	ok := call("Coordinator.Example", &args, &reply)
-//	if ok {
-//		// reply.Y should be 100.
-//		fmt.Printf("reply.Y %v\n", reply.Y)
-//	} else {
-//		fmt.Printf("call failed!\n")
-//	}
-//}
-
 type ByKey []KeyValue
 
 func (a ByKey) Len() int           { return len(a) }
@@ -135,14 +110,14 @@ func DoMapTask(mapf func(string, string) []KeyValue, task *Task) {
 	file.Close()
 	kva := mapf(Filename, string(content))
 
-	intermediateMap := make([][]KeyValue, task.NReduce)
+	intermediateMap := make([][]KeyValue, task.Num)
 	for _, kv := range kva {
-		idx := ihash(kv.Key) % task.NReduce
+		idx := ihash(kv.Key) % task.Num
 		intermediateMap[idx] = append(intermediateMap[idx], kv)
 	}
 	sort.Sort(ByKey(kva))
 	i := 0
-	for i < task.NReduce {
+	for i < task.Num {
 		oname := "mr-" + strconv.Itoa(task.TaskId) + "-" + strconv.Itoa(i)
 		ofile, _ := os.Create(oname)
 		enc := json.NewEncoder(ofile)
@@ -158,7 +133,7 @@ func DoMapTask(mapf func(string, string) []KeyValue, task *Task) {
 func DoReduceTask(reducef func(string, []string) string, task *Task) {
 	i := 0
 	kva := []KeyValue{}
-	for i < task.NReduce {
+	for i < task.Num {
 		filepath := task.Filename + strconv.Itoa(i) + "-" + strconv.Itoa(task.TaskId)
 		file, _ := os.Open(filepath)
 		dec := json.NewDecoder(file)
