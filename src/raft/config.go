@@ -8,7 +8,9 @@ package raft
 // test with the original before submitting.
 //
 
-import "6.5840/labgob"
+import (
+	"6.5840/labgob"
+)
 import "6.5840/labrpc"
 import "bytes"
 import "log"
@@ -133,7 +135,7 @@ func (cfg *config) crash1(i int) {
 		raftlog := cfg.saved[i].ReadRaftState()
 		snapshot := cfg.saved[i].ReadSnapshot()
 		cfg.saved[i] = &Persister{}
-		cfg.saved[i].Save(raftlog, snapshot)
+		cfg.saved[i].SaveStateAndSnapshot(raftlog, snapshot)
 	}
 }
 
@@ -220,9 +222,11 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	for m := range applyCh {
 		err_msg := ""
 		if m.SnapshotValid {
-			cfg.mu.Lock()
-			err_msg = cfg.ingestSnap(i, m.Snapshot, m.SnapshotIndex)
-			cfg.mu.Unlock()
+			if rf.CondInstallSnapshot(m.SnapshotTerm, m.SnapshotIndex, m.Snapshot) {
+				cfg.mu.Lock()
+				err_msg = cfg.ingestSnap(i, m.Snapshot, m.SnapshotIndex)
+				cfg.mu.Unlock()
+			}
 		} else if m.CommandValid {
 			if m.CommandIndex != cfg.lastApplied[i]+1 {
 				err_msg = fmt.Sprintf("server %v apply out of order, expected index %v, got %v", i, cfg.lastApplied[i]+1, m.CommandIndex)
@@ -354,7 +358,7 @@ func (cfg *config) cleanup() {
 
 // attach server i to the net.
 func (cfg *config) connect(i int) {
-	// fmt.Printf("connect(%d)\n", i)
+	//fmt.Printf("connect(%d)\n", i)
 
 	cfg.connected[i] = true
 
@@ -495,6 +499,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
+		//fmt.Printf("cfg.logs: %v\n", mr.Any2String(cfg.logs))
 		cfg.mu.Unlock()
 
 		if ok {
@@ -567,6 +572,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			}
 			cfg.mu.Unlock()
 			if rf != nil {
+				//fmt.Printf("connected: %v, raft: %v\n", mr.Any2String(cfg.connected), mr.Any2String(rf))
 				index1, _, ok := rf.Start(cmd)
 				if ok {
 					index = index1
@@ -574,7 +580,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				}
 			}
 		}
-
+		//fmt.Printf("cfg index: %v\n", index)
 		if index != -1 {
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.
@@ -597,6 +603,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+	//fmt.Printf("cfg.logs: %v\n", mr.Any2String(cfg.logs))
 	if cfg.checkFinished() == false {
 		cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	}

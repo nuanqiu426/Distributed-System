@@ -4,6 +4,7 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
+	"6.5840/raft_previous"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -18,7 +19,6 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
@@ -28,15 +28,14 @@ type Op struct {
 type KVServer struct {
 	mu      sync.Mutex
 	me      int
-	rf      *raft.Raft
-	applyCh chan raft.ApplyMsg
+	rf      *raft_previous.Raft
+	applyCh chan raft_previous.ApplyMsg
 	dead    int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
 }
-
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
@@ -88,8 +87,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.applyCh = make(chan raft_previous.ApplyMsg)
+	kv.rf = raft_previous.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
 
