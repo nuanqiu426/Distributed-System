@@ -100,12 +100,6 @@ type LogEntry struct {
 	Term    int
 	Command interface{}
 }
-type LogType int
-
-const (
-	HeartBeatLogType   LogType = 1
-	AppendEntryLogType LogType = 2
-)
 
 func (rf *Raft) GetLastTermAndIndex() (int, int) {
 	LastIndex := len(rf.logs) - 1
@@ -143,7 +137,6 @@ type RequestVoteReply struct {
 type AppendEntriesArgs struct {
 	Term     int
 	LeaderId int
-	LogType  LogType
 }
 
 type AppendEntriesReply struct {
@@ -274,7 +267,6 @@ func (rf *Raft) heartBeatLoop() {
 				argsI := &AppendEntriesArgs{
 					Term:     rf.term,
 					LeaderId: rf.me,
-					LogType:  HeartBeatLogType,
 				}
 				// 这里需要起一个协程来并行地广播心跳
 				go func(server int, args *AppendEntriesArgs) {
