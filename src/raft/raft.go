@@ -18,15 +18,12 @@ package raft
 //
 
 import (
-	//	"bytes"
+	"6.5840/labrpc"
 	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	//	"6.5840/labgob"
-	"6.5840/labrpc"
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -61,7 +58,7 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	nPeers int
+	nPeers int // numbers of all peers
 
 	lastActiveTime  time.Time
 	timeoutInterval time.Duration
@@ -128,6 +125,22 @@ func (rf *Raft) GetTermByIndex(logIndex int) int {
 	return rf.logs[logIndex].Term
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
+}
+
 const (
 	HeartBeatTimeOut = 50 * time.Millisecond
 	ElectionTimeOut  = 150 * time.Millisecond
@@ -170,11 +183,14 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
+
+	// Optimized version (2B)
+	NextIndex int
 }
 
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	// 实际上相当于是：Candidate把args发给指定Follower,Follower 实际调用 RequestVote返回reply,所以这里应该写的是该怎么Reply
+	// 实际上相当于是: Candidate把args发给指定Follower,Follower 实际调用 RequestVote返回reply,所以这里应该写的是该怎么Reply
 	// reply流程:(1)检查 投票约束+重复投票 (2)更新自己的信息 (3)确认投票
 
 	// Follower rf
@@ -233,26 +249,38 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.lastActiveTime = time.Now()
 	// 收到心跳说明已经有leader了
 	rf.timeoutInterval = randElectionTime()
+
 	// 2B
-	// 例:Leader(12,5) -> Follower(12,4)会被拒绝\ Leader(11,3) -> Follower(12,3) 不会被拒绝(不是(12,4))
-	if args.PrevLogIndex > rf.GetLastIndex() || args.PrevLogTerm != rf.GetTermByIndex(args.PrevLogIndex) {
+	// 例:Leader(12,5) -> Follower(12,4)虽然index相等,但是term不同会被拒绝\ Leader(11,3) -> Follower(12,3) term相同不会被拒绝
+	// 总结: 直到follower_index ≥ leader_index的 且 follower_term == leader_term相同时才进行覆盖
+
+	// Optimized version (2B)
+	if args.PrevLogIndex > rf.GetLastIndex() {
+		reply.NextIndex = rf.GetLastIndex() + 1
 		return
 	}
-
-	// 例: Leader 11 < Follower 12, Follower只保留到到11,11之后全扔掉
-	if args.PrevLogIndex < rf.GetLastIndex() {
+	if args.PrevLogTerm != rf.GetTermByIndex(args.PrevLogIndex) {
+		index := args.PrevLogIndex
+		term := rf.GetTermByIndex(index)
+		// Follower查找自己上一个term的lastIndex
+		for index > 0 && rf.GetTermByIndex(index) == term {
+			index--
+		}
+		reply.NextIndex = index + 1
+		return
+	}
+	// 都满足了就开始覆盖
+	if args.PrevLogIndex < rf.GetLastIndex() { // 例: Leader 11 < Follower 12, Follower只保留到到11,11之后全扔掉
 		rf.logs = rf.logs[:args.PrevLogIndex+1] // 包括PrevLogIndex已经确保是和Leader保持一致的
 	}
 	rf.logs = append(rf.logs, args.LogEntries...) // 接下来覆盖掉Follower的PrevLogIndex之后的内容
 
 	// len(自己能确认提交的log数目) = min(len(自己拥有的log数目),len(全局确认能被确认提交的log数目))
-	if args.LeaderCommittedIndex > rf.commitIndex {
-		rf.commitIndex = args.LeaderCommittedIndex
-		if rf.commitIndex > rf.GetLastIndex() {
-			rf.commitIndex = rf.GetLastIndex()
-		}
-	}
+	rf.commitIndex = min(rf.GetLastIndex(), args.LeaderCommittedIndex)
 
+	rf.matchIndex[rf.me] = rf.GetLastIndex()
+	rf.nextIndex[rf.me] = rf.matchIndex[rf.me] + 1
+	reply.NextIndex = rf.nextIndex[rf.me]
 	reply.Success = true
 }
 
@@ -314,11 +342,13 @@ func (rf *Raft) heartBeatLoop() {
 					continue
 				}
 
+				prevLogIndex := min(rf.matchIndex[i], rf.GetLastIndex())
+
 				argsI := &AppendEntriesArgs{
 					Term:                 rf.term,
 					LeaderId:             rf.me,
 					Type:                 HeartBeatLogType,
-					PrevLogIndex:         rf.matchIndex[i],                    //Leader记录Follower的logIndex
+					PrevLogIndex:         prevLogIndex,                        //Leader记录Follower的logIndex
 					PrevLogTerm:          rf.GetTermByIndex(rf.matchIndex[i]), //Leader的Term
 					LeaderCommittedIndex: rf.commitIndex,                      //已经确认过半,现在能被提交的log数目
 				}
@@ -330,7 +360,7 @@ func (rf *Raft) heartBeatLoop() {
 					argsI.LogEntries = append(argsI.LogEntries, rf.logs[rf.nextIndex[i]:rf.GetLastIndex()+1]...)
 				}
 
-				// 这里需要起一个协程来并行地广播心跳
+				// 这里需要起一个协程来并行地广播心跳, server是服务器不是master
 				go func(server int, args *AppendEntriesArgs) {
 					reply := &AppendEntriesReply{}
 					ok := rf.sendAppendEntries(server, argsI, reply)
@@ -347,9 +377,9 @@ func (rf *Raft) heartBeatLoop() {
 						return
 					}
 
-					// Leader.term不比Follower.term小 & Leader.LogTerm == Follower.LogTerm才会Success
+					// follower_index ≥ leader_index的 且 follower_term == leader_term 才会Success
 					if reply.Success { //Success意味着现在Leader和Follower一致了
-						rf.nextIndex[server] += len(args.LogEntries)
+						rf.nextIndex[server] = reply.NextIndex
 						rf.matchIndex[server] = rf.nextIndex[server] - 1
 
 						//每次heart_beat:Leader都会遍历Follower,有的Follower现在成功被Leader匹配且覆盖了
@@ -365,19 +395,20 @@ func (rf *Raft) heartBeatLoop() {
 						newCommitIndex := matchIndexSlice[rf.nPeers/2]
 						// 不能提交不属于当前term的日志
 						if newCommitIndex > rf.commitIndex && rf.logs[newCommitIndex].Term == rf.term {
-							rf.commitIndex = newCommitIndex
+							rf.commitIndex = min(rf.GetLastIndex(), newCommitIndex)
 						}
 
 					} else {
-						// (12,5)不对\现在--往前找
-						rf.nextIndex[server]--
-						if rf.nextIndex[server] < 1 {
-							rf.nextIndex[server] = 1
+						// Optimized version (2B)
+						// Success分为两种情况:
+						//(1)不满足 follower_index ≥ leader_index的 且 follower_term == leader_term
+						//(2)直接 follower_term > leader_term, 这个时候NextIndex初始值为0,需要置1，不然matchIndex就有问题了
+						if reply.NextIndex == 0 {
+							reply.NextIndex = 1
 						}
-						rf.matchIndex[server] = rf.nextIndex[server] - 1
-						if rf.matchIndex[server] < 0 {
-							rf.matchIndex[server] = 0
-						}
+
+						rf.nextIndex[server] = reply.NextIndex
+						rf.matchIndex[server] = reply.NextIndex - 1
 					}
 
 				}(i, argsI)
@@ -644,13 +675,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
 	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
+	// 显然：当你尝试修改下面四项中的其中一项时,就需要persist
+	// 外层加锁,内层就不能加了
+	//w := new(bytes.Buffer)
+	//e := labgob.NewEncoder(w)
+	//e.Encode(rf.term)
+	//e.Encode(rf.votedFor)
+	//e.Encode(rf.leaderId)
+	//e.Encode(rf.logs)
+	//raftstate := w.Bytes()
+	//rf.persister.SaveRaftState(raftstate)
 }
 
 // restore previously persisted state.
@@ -659,18 +693,15 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	// 需要加锁
+	//r := bytes.NewBuffer(data)
+	//d := labgob.NewDecoder(r)
+	//rf.mu.Lock()
+	//d.Decode(&rf.term)
+	//d.Decode(&rf.votedFor)
+	//d.Decode(&rf.leaderId)
+	//d.Decode(&rf.logs)
+	//rf.mu.Unlock()
 }
 
 // the service says it has created a snapshot that has
