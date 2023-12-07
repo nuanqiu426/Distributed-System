@@ -18,7 +18,9 @@ package raft
 //
 
 import (
+	"6.5840/labgob"
 	"6.5840/labrpc"
+	"bytes"
 	"math/rand"
 	"sort"
 	"sync"
@@ -208,6 +210,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.role = Follower
 		rf.votedFor = RoleNone
 		rf.leaderId = RoleNone
+		rf.persist()
 	}
 	// 投票约束2
 	lastLogIndex, lastLogTerm := rf.GetLastTermAndIndex()
@@ -224,6 +227,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.lastActiveTime = time.Now()
 		rf.timeoutInterval = randElectionTime()
 		reply.VoteGranted = true
+		rf.persist()
 	}
 
 }
@@ -242,6 +246,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term > rf.term {
 		rf.term = args.Term
 		rf.role = Follower
+		rf.votedFor = RoleNone
+		rf.leaderId = RoleNone
+		rf.persist()
 	}
 
 	rf.leaderId = args.LeaderId
@@ -274,6 +281,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.logs = rf.logs[:args.PrevLogIndex+1] // 包括PrevLogIndex已经确保是和Leader保持一致的
 	}
 	rf.logs = append(rf.logs, args.LogEntries...) // 接下来覆盖掉Follower的PrevLogIndex之后的内容
+	rf.persist()
 
 	// len(自己能确认提交的log数目) = min(len(自己拥有的log数目),len(全局确认能被确认提交的log数目))
 	rf.commitIndex = min(rf.GetLastIndex(), args.LeaderCommittedIndex)
@@ -374,6 +382,7 @@ func (rf *Raft) heartBeatLoop() {
 						rf.term = reply.Term
 						rf.votedFor = RoleNone
 						rf.leaderId = RoleNone
+						rf.persist()
 						return
 					}
 
@@ -438,6 +447,9 @@ func (rf *Raft) electionLoop() {
 			}
 			rf.term++
 			rf.votedFor = rf.me
+
+			rf.persist()
+
 			rf.lastActiveTime = time.Now()
 			rf.timeoutInterval = randElectionTime()
 			lastLogIndex, lastLogTerm := rf.GetLastTermAndIndex()
@@ -455,10 +467,12 @@ func (rf *Raft) electionLoop() {
 				rf.role = Follower
 				rf.votedFor = RoleNone
 				rf.leaderId = RoleNone
+				rf.persist()
 			} else if VoteNum > rf.nPeers/2 {
 				rf.role = Leader
 				rf.leaderId = rf.me
 				rf.lastActiveTime = time.Now()
+				rf.persist()
 			}
 		}()
 
@@ -571,8 +585,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	rf.logs = append(rf.logs, entry)
 	index := rf.GetLastIndex()
-	term := rf.GetTermByIndex(index)
-
+	term := rf.term
+	rf.persist()
 	return index, term, true
 }
 
@@ -677,14 +691,14 @@ func (rf *Raft) persist() {
 	// Your code here (2C).
 	// 显然：当你尝试修改下面四项中的其中一项时,就需要persist
 	// 外层加锁,内层就不能加了
-	//w := new(bytes.Buffer)
-	//e := labgob.NewEncoder(w)
-	//e.Encode(rf.term)
-	//e.Encode(rf.votedFor)
-	//e.Encode(rf.leaderId)
-	//e.Encode(rf.logs)
-	//raftstate := w.Bytes()
-	//rf.persister.SaveRaftState(raftstate)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.term)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.leaderId)
+	e.Encode(rf.logs)
+	raftstate := w.Bytes()
+	rf.persister.SaveRaftState(raftstate)
 }
 
 // restore previously persisted state.
@@ -694,14 +708,14 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// 需要加锁
-	//r := bytes.NewBuffer(data)
-	//d := labgob.NewDecoder(r)
-	//rf.mu.Lock()
-	//d.Decode(&rf.term)
-	//d.Decode(&rf.votedFor)
-	//d.Decode(&rf.leaderId)
-	//d.Decode(&rf.logs)
-	//rf.mu.Unlock()
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	rf.mu.Lock()
+	d.Decode(&rf.term)
+	d.Decode(&rf.votedFor)
+	d.Decode(&rf.leaderId)
+	d.Decode(&rf.logs)
+	rf.mu.Unlock()
 }
 
 // the service says it has created a snapshot that has
