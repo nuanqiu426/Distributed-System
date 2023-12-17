@@ -1,3 +1,4 @@
 # Distributed-System
-MIT 6824
-![image](https://github.com/nuanqiu426/Distributed-System/assets/52807009/7e655c21-e738-4262-86b5-1495527effe0)
+
+![image](https://github.com/nuanqiu426/Distributed-System/assets/52807009/1923e332-55c3-42a3-a762-a85340bad183)
+
